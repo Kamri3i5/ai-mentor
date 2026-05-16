@@ -2,7 +2,8 @@ import { useCallback, useRef, useState } from 'react';
 import { JUDGE_SYSTEM_PROMPT } from '../data/scenarios';
 import type { FeedbackAnalysis, Message, Scenario, SessionResult } from '../types';
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 type GeminiRole = 'user' | 'model';
 
@@ -38,7 +39,7 @@ const createMessage = (role: 'user' | 'assistant', content: string): Message => 
   timestamp: new Date(),
 });
 
-const getApiKey = () => 'AIzaSyAsW_P9Gp3nTZ6gMkMWsTeRNJRMpHFa0_Q';
+const getApiKey = () => import.meta.env.VITE_GEMINI_API_KEY?.trim();
 
 const callGemini = async (
   systemPrompt: string,
@@ -50,10 +51,11 @@ const callGemini = async (
     throw new Error('Добавьте VITE_GEMINI_API_KEY в .env, затем перезапустите dev-сервер.');
   }
 
-  const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+  const response = await fetch(GEMINI_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
     },
     body: JSON.stringify({
       contents: messages,
