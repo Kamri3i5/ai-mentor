@@ -38,7 +38,7 @@ const createMessage = (role: 'user' | 'assistant', content: string): Message => 
   timestamp: new Date(),
 });
 
-const getApiKey = () => import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
+const getApiKey = () => 'AIzaSyARAqB7Geee5cwvgbK2Spa8BnXTs8cZRPA';
 
 const callGemini = async (
   systemPrompt: string,
