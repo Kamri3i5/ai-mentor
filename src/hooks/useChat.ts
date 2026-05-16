@@ -2,9 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { JUDGE_SYSTEM_PROMPT } from '../data/scenarios';
 import type { FeedbackAnalysis, Message, Scenario, SessionResult } from '../types';
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
-
-
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
 type GeminiRole = 'user' | 'model';
 
@@ -40,7 +38,7 @@ const createMessage = (role: 'user' | 'assistant', content: string): Message => 
   timestamp: new Date(),
 });
 
-const getApiKey = () => 'AIzaSyARAqB7Geee5cwvgbK2Spa8BnXTs8cZRPA';
+const getApiKey = () => 'AIzaSyAsW_P9Gp3nTZ6gMkMWsTeRNJRMpHFa0_Q';
 
 const callGemini = async (
   systemPrompt: string,
