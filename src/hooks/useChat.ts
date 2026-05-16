@@ -2,14 +2,13 @@ import { useCallback, useRef, useState } from 'react';
 import { JUDGE_SYSTEM_PROMPT } from '../data/scenarios';
 import type { FeedbackAnalysis, Message, Scenario, SessionResult } from '../types';
 
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-sonnet-4-20250514';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
-type AnthropicRole = 'user' | 'assistant';
+type GeminiRole = 'user' | 'model';
 
-interface AnthropicMessage {
-  role: AnthropicRole;
-  content: string;
+interface GeminiMessage {
+  role: GeminiRole;
+  parts: { text: string }[];
 }
 
 interface UseChatState {
@@ -32,45 +31,39 @@ const createId = () => {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
-const createMessage = (role: AnthropicRole, content: string): Message => ({
+const createMessage = (role: 'user' | 'assistant', content: string): Message => ({
   id: createId(),
   role,
   content,
   timestamp: new Date(),
 });
 
-const getApiKey = () => import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined;
+const getApiKey = () => import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
 
-const readTextFromResponse = (payload: { content?: Array<{ type?: string; text?: string }> }) =>
-  payload.content
-    ?.map((block) => (block.type === 'text' ? block.text ?? '' : ''))
-    .join('')
-    .trim() ?? '';
-
-const callAnthropic = async (
+const callGemini = async (
   systemPrompt: string,
-  messages: AnthropicMessage[],
-  maxTokens = 1000,
+  messages: GeminiMessage[],
 ) => {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    throw new Error('Добавьте VITE_ANTHROPIC_API_KEY в .env, затем перезапустите dev-сервер.');
+    throw new Error('Добавьте VITE_GEMINI_API_KEY в .env, затем перезапустите dev-сервер.');
   }
 
-  const response = await fetch(ANTHROPIC_URL, {
+  const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages,
+      contents: messages,
+      system_instruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 1024,
+      }
     }),
   });
 
@@ -80,30 +73,29 @@ const callAnthropic = async (
     const message =
       typeof payload?.error?.message === 'string'
         ? payload.error.message
-        : 'Не удалось получить ответ от Anthropic API.';
+        : 'Не удалось получить ответ от Gemini API.';
     throw new Error(message);
   }
 
-  const text = readTextFromResponse(payload);
+  const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
 
   if (!text) {
-    throw new Error('Anthropic API вернул пустой ответ.');
+    throw new Error('Gemini API вернул пустой ответ.');
   }
 
   return text;
 };
 
-const buildScenarioMessages = (visibleMessages: Message[]): AnthropicMessage[] => {
+const buildScenarioMessages = (visibleMessages: Message[]): GeminiMessage[] => {
   const history = visibleMessages.map((message) => ({
-    role: message.role,
-    content: message.content,
+    role: (message.role === 'assistant' ? 'model' : 'user') as GeminiRole,
+    parts: [{ text: message.content }],
   }));
 
   return [
     {
       role: 'user',
-      content:
-        'Системное сообщение тренажёра: клиент уже находится в отделении. Веди себя по сценарию и отвечай только репликами клиента.',
+      parts: [{ text: 'Системное сообщение тренажёра: клиент уже находится в отделении. Веди себя по сценарию и отвечай только репликами клиента.' }],
     },
     ...history,
   ];
@@ -150,11 +142,12 @@ export const useChat = (scenario: Scenario | null): UseChatState => {
     setError(null);
 
     try {
-      const firstReply = await callAnthropic(scenario.systemPrompt, [
+      const firstReply = await callGemini(scenario.systemPrompt, [
         {
           role: 'user',
-          content:
-            'Начни диалог первым короткой естественной репликой клиента по ситуации. Не объясняй сценарий.',
+          parts: [{
+            text: 'Начни диалог первым короткой естественной репликой клиента по ситуации. Не объясняй сценарий.',
+          }],
         },
       ]);
 
@@ -183,7 +176,7 @@ export const useChat = (scenario: Scenario | null): UseChatState => {
       setSessionActive(true);
 
       try {
-        const reply = await callAnthropic(scenario.systemPrompt, buildScenarioMessages(nextMessages));
+        const reply = await callGemini(scenario.systemPrompt, buildScenarioMessages(nextMessages));
         setMessages((current) => [...current, createMessage('assistant', reply)]);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Не удалось отправить сообщение.');
@@ -205,15 +198,14 @@ export const useChat = (scenario: Scenario | null): UseChatState => {
 
     try {
       const transcript = buildTranscript(messages);
-      const feedback = await callAnthropic(
+      const feedback = await callGemini(
         JUDGE_SYSTEM_PROMPT,
         [
           {
             role: 'user',
-            content: `Сценарий: ${scenario.title}\n\nДиалог:\n${transcript}`,
+            parts: [{ text: `Сценарий: ${scenario.title}\n\nДиалог:\n${transcript}` }],
           },
         ],
-        1000,
       );
       const parsed = parseFeedback(feedback);
 
