@@ -2,7 +2,8 @@ import { useCallback, useRef, useState } from 'react';
 import { JUDGE_SYSTEM_PROMPT } from '../data/scenarios';
 import type { FeedbackAnalysis, Message, Scenario, SessionResult } from '../types';
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
+
 
 
 type GeminiRole = 'user' | 'model';
