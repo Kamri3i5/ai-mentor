@@ -2,14 +2,14 @@ import { useCallback, useRef, useState } from 'react';
 import { JUDGE_SYSTEM_PROMPT } from '../data/scenarios';
 import type { FeedbackAnalysis, Message, Scenario, SessionResult } from '../types';
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
-type GeminiRole = 'user' | 'model';
+type GroqRole = 'system' | 'user' | 'assistant';
 
-interface GeminiMessage {
-  role: GeminiRole;
-  parts: { text: string }[];
+interface GroqMessage {
+  role: GroqRole;
+  content: string;
 }
 
 interface UseChatState {
@@ -39,69 +39,68 @@ const createMessage = (role: 'user' | 'assistant', content: string): Message => 
   timestamp: new Date(),
 });
 
-const getApiKey = () => import.meta.env.VITE_GEMINI_API_KEY?.trim();
+const getApiKey = () => import.meta.env.VITE_GROQ_API_KEY?.trim();
 
-const callGemini = async (
-  systemPrompt: string,
-  messages: GeminiMessage[],
-) => {
+const readTextFromResponse = (payload: { choices?: Array<{ message?: { content?: string } }> }) =>
+  payload.choices?.[0]?.message?.content?.trim() ?? '';
+
+const getGroqErrorMessage = (status: number, payload: { error?: { message?: string } }) => {
+  if (status === 429) {
+    return 'Превышен бесплатный лимит Groq. Подождите немного и попробуйте снова.';
+  }
+
+  return typeof payload?.error?.message === 'string'
+    ? payload.error.message
+    : 'Не удалось получить ответ от Groq API.';
+};
+
+const callGroq = async (systemPrompt: string, messages: GroqMessage[]) => {
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    throw new Error('Добавьте VITE_GEMINI_API_KEY в .env, затем перезапустите dev-сервер.');
+    throw new Error('Добавьте VITE_GROQ_API_KEY в .env, затем перезапустите dev-сервер.');
   }
 
-  const response = await fetch(GEMINI_URL, {
+  const response = await fetch(GROQ_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      contents: messages,
-      system_instruction: {
-        parts: [{ text: systemPrompt }]
-      },
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 1024,
-      }
+      model: GROQ_MODEL,
+      temperature: 0.7,
+      max_tokens: 1024,
+      messages: [{ role: 'system', content: systemPrompt }, ...messages],
     }),
   });
 
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const message =
-      typeof payload?.error?.message === 'string'
-        ? payload.error.message
-        : 'Не удалось получить ответ от Gemini API.';
-    throw new Error(message);
+    throw new Error(getGroqErrorMessage(response.status, payload));
   }
 
-  const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
+  const text = readTextFromResponse(payload);
 
   if (!text) {
-    throw new Error('Gemini API вернул пустой ответ.');
+    throw new Error('Groq API вернул пустой ответ.');
   }
 
   return text;
 };
 
-const buildScenarioMessages = (visibleMessages: Message[]): GeminiMessage[] => {
-  const history = visibleMessages.map((message) => ({
-    role: (message.role === 'assistant' ? 'model' : 'user') as GeminiRole,
-    parts: [{ text: message.content }],
-  }));
-
-  return [
-    {
-      role: 'user',
-      parts: [{ text: 'Системное сообщение тренажёра: клиент уже находится в отделении. Веди себя по сценарию и отвечай только репликами клиента.' }],
-    },
-    ...history,
-  ];
-};
+const buildScenarioMessages = (visibleMessages: Message[]): GroqMessage[] => [
+  {
+    role: 'user',
+    content:
+      'Системное сообщение тренажёра: клиент уже находится в отделении. Веди себя по сценарию и отвечай только репликами клиента.',
+  },
+  ...visibleMessages.map((message) => ({
+    role: message.role,
+    content: message.content,
+  })),
+];
 
 const extractJson = (content: string) => {
   const trimmed = content.trim();
@@ -144,12 +143,11 @@ export const useChat = (scenario: Scenario | null): UseChatState => {
     setError(null);
 
     try {
-      const firstReply = await callGemini(scenario.systemPrompt, [
+      const firstReply = await callGroq(scenario.systemPrompt, [
         {
           role: 'user',
-          parts: [{
-            text: 'Начни диалог первым короткой естественной репликой клиента по ситуации. Не объясняй сценарий.',
-          }],
+          content:
+            'Начни диалог первым короткой естественной репликой клиента по ситуации. Не объясняй сценарий.',
         },
       ]);
 
@@ -178,7 +176,7 @@ export const useChat = (scenario: Scenario | null): UseChatState => {
       setSessionActive(true);
 
       try {
-        const reply = await callGemini(scenario.systemPrompt, buildScenarioMessages(nextMessages));
+        const reply = await callGroq(scenario.systemPrompt, buildScenarioMessages(nextMessages));
         setMessages((current) => [...current, createMessage('assistant', reply)]);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Не удалось отправить сообщение.');
@@ -200,15 +198,12 @@ export const useChat = (scenario: Scenario | null): UseChatState => {
 
     try {
       const transcript = buildTranscript(messages);
-      const feedback = await callGemini(
-        JUDGE_SYSTEM_PROMPT,
-        [
-          {
-            role: 'user',
-            parts: [{ text: `Сценарий: ${scenario.title}\n\nДиалог:\n${transcript}` }],
-          },
-        ],
-      );
+      const feedback = await callGroq(JUDGE_SYSTEM_PROMPT, [
+        {
+          role: 'user',
+          content: `Сценарий: ${scenario.title}\n\nДиалог:\n${transcript}`,
+        },
+      ]);
       const parsed = parseFeedback(feedback);
 
       return {
